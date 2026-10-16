@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Identity;
+using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,6 +17,16 @@ builder.Services.AddCors(options =>
         policy.WithOrigins("http://localhost:5173")
             .AllowAnyHeader()
             .AllowAnyMethod()));
+builder.Services
+    .AddIdentityApiEndpoints<ApplicationUser>(options =>
+    {
+        options.User.RequireUniqueEmail = true;
+        options.Password.RequiredLength = 12;
+    })
+    .AddRoles<IdentityRole>()
+    .AddEntityFrameworkStores<SignalDeskDbContext>();
+
+builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
@@ -26,6 +38,18 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapGroup("/auth").MapIdentityApi<ApplicationUser>();
+
+app.MapGet("/api/me", (ClaimsPrincipal user) =>
+    Results.Ok(new
+    {
+        id = user.FindFirstValue(ClaimTypes.NameIdentifier),
+        email = user.FindFirstValue(ClaimTypes.Email)
+    }))
+    .RequireAuthorization();
 
 app.MapGet("/health", () =>
     Results.Ok(new { status = "healthy" }));
