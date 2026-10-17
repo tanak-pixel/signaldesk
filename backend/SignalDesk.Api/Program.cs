@@ -1,35 +1,109 @@
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Keep database credentials in configuration or user secrets, not source code.
+var isDevelopment = builder.Environment.IsDevelopment();
+
+// Database credentials come from user secrets or host configuration.
 var connectionString =
-    builder.Configuration.GetConnectionString("SignalDesk")
-    ?? throw new InvalidOperationException(
-        "Missing ConnectionStrings:SignalDesk. Configure user secrets.");
+    builder.Configuration.GetConnectionString("SignalDesk");
+
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    throw new InvalidOperationException(
+        "Missing ConnectionStrings:SignalDesk. " +
+        "Use user secrets locally or ConnectionStrings__SignalDesk on the host.");
+}
 
 builder.Services.AddDbContext<SignalDeskDbContext>(options =>
     options.UseNpgsql(connectionString));
 
-// Permit the local Vite development server to call this API from the browser.
+// Explicit frontend origins for cross-origin browser requests.
+var configuredOrigins = builder.Configuration
+    .GetSection("Cors:AllowedOrigins")
+    .Get<string[]>();
+
+var allowedOrigins = (
+    configuredOrigins ??
+    (isDevelopment
+        ? new[]
+        {
+            "http://localhost:5173",
+            "http://localhost:5174"
+        }
+        : Array.Empty<string>()))
+    .Select(origin => origin.Trim().TrimEnd('/'))
+    .Where(origin => !string.IsNullOrWhiteSpace(origin))
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
+
+foreach (var origin in allowedOrigins)
+{
+    if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) ||
+        (uri.Scheme != Uri.UriSchemeHttp &&
+         uri.Scheme != Uri.UriSchemeHttps) ||
+        uri.AbsolutePath != "/" ||
+        !string.IsNullOrEmpty(uri.Query) ||
+        !string.IsNullOrEmpty(uri.Fragment) ||
+        !string.IsNullOrEmpty(uri.UserInfo))
+    {
+        throw new InvalidOperationException(
+            "Each Cors:AllowedOrigins value must be an HTTP/HTTPS origin " +
+            "without a path, query, or fragment.");
+    }
+
+    if (!isDevelopment && uri.Scheme != Uri.UriSchemeHttps)
+    {
+        throw new InvalidOperationException(
+            "Deployed frontend origins must use HTTPS.");
+    }
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins(
-                "http://localhost:5173",
-                "http://localhost:5174")
-            .AllowAnyHeader()
-            .AllowAnyMethod();
+        if (allowedOrigins.Length > 0)
+        {
+            policy.WithOrigins(allowedOrigins)
+                .AllowAnyHeader()
+                .AllowAnyMethod();
+        }
+        // No configured origins means no cross-origin access.
+        // Same-origin requests do not require CORS.
     });
 });
+
+// Identity bearer tokens depend on Data Protection keys.
+var dataProtection = builder.Services
+    .AddDataProtection()
+    .SetApplicationName("SignalDesk");
+
+var keysPath =
+    builder.Configuration["DataProtection:KeysPath"];
+
+if (!string.IsNullOrWhiteSpace(keysPath))
+{
+    var absoluteKeysPath = Path.GetFullPath(keysPath);
+
+    Directory.CreateDirectory(absoluteKeysPath);
+
+    dataProtection.PersistKeysToFileSystem(
+        new DirectoryInfo(absoluteKeysPath));
+}
+else if (!isDevelopment)
+{
+    throw new InvalidOperationException(
+        "Configure DataProtection:KeysPath using a private persistent " +
+        "directory before starting outside Development.");
+}
 
 builder.Services
     .AddIdentityApiEndpoints<ApplicationUser>(options =>
     {
-        // Require unique account emails and a stronger local password.
         options.User.RequireUniqueEmail = true;
         options.Password.RequiredLength = 12;
     })
@@ -37,31 +111,36 @@ builder.Services
     .AddEntityFrameworkStores<SignalDeskDbContext>();
 
 builder.Services.AddAuthorization();
+builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
-// Keep this learning version local until deployment is configured.
-if (!app.Environment.IsDevelopment())
+if (!isDevelopment)
 {
-    throw new InvalidOperationException(
-        "Learning starter: run locally in Development only.");
+    // Return generic problem responses for unexpected production errors.
+    app.UseExceptionHandler();
 }
 
 app.UseCors();
-// Optionally grant the Technician role to a pre-registered local account.
+app.UseAuthentication();
+app.UseAuthorization();
+
+// Local-only technician bootstrap.
+// Production accounts must be provisioned separately.
 var technicianEmail =
     builder.Configuration["Development:TechnicianEmail"];
-    
-if (app.Environment.IsDevelopment() &&
+
+if (isDevelopment &&
     !string.IsNullOrWhiteSpace(technicianEmail))
 {
-    await using var scope = app.Services.CreateAsyncScope();
+    await using var scope =
+        app.Services.CreateAsyncScope();
 
-    var roleManager =
-        scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
+    var roleManager = scope.ServiceProvider
+        .GetRequiredService<RoleManager<IdentityRole>>();
 
-    var userManager =
-        scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+    var userManager = scope.ServiceProvider
+        .GetRequiredService<UserManager<ApplicationUser>>();
 
     const string roleName = "Technician";
 
@@ -73,11 +152,14 @@ if (app.Environment.IsDevelopment() &&
         if (!result.Succeeded)
         {
             throw new InvalidOperationException(
-                string.Join("; ", result.Errors.Select(e => e.Description)));
+                string.Join(
+                    "; ",
+                    result.Errors.Select(error => error.Description)));
         }
     }
 
-    var technician = await userManager.FindByEmailAsync(technicianEmail);
+    var technician =
+        await userManager.FindByEmailAsync(technicianEmail);
 
     if (technician is null)
     {
@@ -93,21 +175,20 @@ if (app.Environment.IsDevelopment() &&
         if (!result.Succeeded)
         {
             throw new InvalidOperationException(
-                string.Join("; ", result.Errors.Select(e => e.Description)));
+                string.Join(
+                    "; ",
+                    result.Errors.Select(error => error.Description)));
         }
     }
 }
-app.UseAuthentication();
-app.UseAuthorization();
 
 // Registration and login endpoints.
 app.MapGroup("/auth").MapIdentityApi<ApplicationUser>();
 
-// Public health check.
+// Liveness check; this does not check database connectivity.
 app.MapGet("/health", () =>
     Results.Ok(new { status = "healthy" }));
 
-// Return the signed-in account.
 app.MapGet("/api/me", (ClaimsPrincipal user) =>
     Results.Ok(new
     {
@@ -116,27 +197,28 @@ app.MapGet("/api/me", (ClaimsPrincipal user) =>
     }))
     .RequireAuthorization();
 
-// Reporters see their own reports.
-// Technicians and admins can see all reports.
+// Apply ownership filtering before joining incident summaries.
 app.MapGet("/api/reports",
-    async (SignalDeskDbContext db, ClaimsPrincipal user) =>
+    async (
+        SignalDeskDbContext db,
+        ClaimsPrincipal user) =>
 {
-    var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+    var userId =
+        user.FindFirstValue(ClaimTypes.NameIdentifier);
 
-    if (string.IsNullOrEmpty(userId))
-    {
+    if (string.IsNullOrWhiteSpace(userId))
         return Results.Unauthorized();
-    }
 
     var query = db.Reports.AsNoTracking();
 
-    // Apply ownership filtering before joining incident details.
     var canReviewAll =
-        user.IsInRole("Technician") || user.IsInRole("Admin");
+        user.IsInRole("Technician") ||
+        user.IsInRole("Admin");
 
     if (!canReviewAll)
     {
-        query = query.Where(r => r.ReporterId == userId);
+        query = query.Where(
+            report => report.ReporterId == userId);
     }
 
     var reports = await (
@@ -158,7 +240,6 @@ app.MapGet("/api/reports",
             report.Version,
             report.IncidentId,
 
-            // Reporters receive only public incident summary fields here.
             LinkedIncident = incident == null
                 ? null
                 : new
@@ -172,19 +253,18 @@ app.MapGet("/api/reports",
     return Results.Ok(reports);
 }).RequireAuthorization();
 
-// STEP 4: Create a report owned by the signed-in account.
+// Ownership always comes from the authenticated account.
 app.MapPost("/api/reports",
     async (
         CreateReport input,
         SignalDeskDbContext db,
         ClaimsPrincipal user) =>
 {
-    var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+    var userId =
+        user.FindFirstValue(ClaimTypes.NameIdentifier);
 
-    if (string.IsNullOrEmpty(userId))
-    {
+    if (string.IsNullOrWhiteSpace(userId))
         return Results.Unauthorized();
-    }
 
     var title = input.Title?.Trim() ?? "";
     var description = input.Description?.Trim() ?? "";
@@ -204,7 +284,6 @@ app.MapPost("/api/reports",
         });
     }
 
-    // Assign ownership to the authenticated reporter, never to request input.
     var report = new SupportReport
     {
         Id = Guid.NewGuid(),
@@ -221,10 +300,11 @@ app.MapPost("/api/reports",
     db.Reports.Add(report);
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/reports/{report.Id}", report);
+    return Results.Created(
+        $"/api/reports/{report.Id}",
+        report);
 }).RequireAuthorization();
 
-// STEP 5: Only technicians and admins can change report status.
 app.MapPatch("/api/reports/{id:guid}/status",
     async (
         Guid id,
@@ -242,9 +322,7 @@ app.MapPatch("/api/reports/{id:guid}/status",
     var report = await db.Reports.FindAsync(id);
 
     if (report is null)
-    {
         return Results.NotFound();
-    }
 
     if (input.Version != report.Version)
     {
@@ -254,7 +332,6 @@ app.MapPatch("/api/reports/{id:guid}/status",
         });
     }
 
-    // EF compares the original version at save time to catch concurrent writes.
     report.Status = input.Status;
     report.Version++;
 
@@ -277,36 +354,24 @@ app.MapPatch("/api/reports/{id:guid}/status",
 app.MapIncidentEndpoints();
 app.MapIncidentSuggestionEndpoints();
 
-
-// Lets the frontend tailor controls to the signed-in user's role.
-app.MapGet("/api/access", (System.Security.Claims.ClaimsPrincipal user) =>
+app.MapGet("/api/access", (ClaimsPrincipal user) =>
     Results.Ok(new
     {
         canManageIncidents =
-            user.IsInRole("Technician") || user.IsInRole("Admin")
+            user.IsInRole("Technician") ||
+            user.IsInRole("Admin")
     }))
     .RequireAuthorization();
 
-foreach (var url in new[]
-{
-    // Support both API URLs used during local development.
-    "http://localhost:5080",
-    "http://localhost:5081"
-})
-{
-    if (!app.Urls.Contains(url))
-    {
-        app.Urls.Add(url);
-    }
-}
-
+// Listening URLs now come from --urls or hosting configuration.
 app.Run();
-// The following record types are used to bind JSON request bodies to strongly typed parameters in the API endpoints.
+
 record CreateReport(
     string? Title,
     string? Description,
     string? Service,
     string? Location);
-// The version number is used to detect concurrent updates to the same report.  
+
 record ChangeStatus(string? Status, int Version);
+
 public partial class Program { }
