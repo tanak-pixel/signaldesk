@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import { AuthGate, API, authFetch } from './AuthGate';
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
