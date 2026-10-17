@@ -1,11 +1,12 @@
+import { AuthGate, API, authFetch } from './AuthGate';
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 
+
 type Report = { id: string; title: string; description: string; service: string; location: string; status: string; createdAt: string; version: number };
-const API = 'http://localhost:5080'; // Local lesson only. Configure hosting in the deployment milestone.
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${path}`, options);
+  const response = await authFetch(`${API}${path}`, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.message ?? `Request failed (${response.status})`);
@@ -59,4 +60,8 @@ function App() {
     </section></div>
   </main>;
 }
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(
+  <AuthGate>
+    <App />
+  </AuthGate>
+);
