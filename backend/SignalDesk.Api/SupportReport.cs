@@ -9,4 +9,7 @@ public class SupportReport
     public DateTimeOffset CreatedAt { get; set; }
     public int Version { get; set; } = 1;
     public string? ReporterId { get; set; }
+
+    // Null means the report isn't linked to an incident.
+    public Guid? IncidentId { get; set; }
 }

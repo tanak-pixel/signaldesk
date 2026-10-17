@@ -135,9 +135,34 @@ app.MapGet("/api/reports",
         query = query.Where(r => r.ReporterId == userId);
     }
 
-    var reports = await query
-        .OrderByDescending(r => r.CreatedAt)
-        .ToListAsync();
+    var reports = await (
+        from report in query
+        join incident in db.Incidents.AsNoTracking()
+            on report.IncidentId equals (Guid?)incident.Id
+            into linkedIncidents
+        from incident in linkedIncidents.DefaultIfEmpty()
+        orderby report.CreatedAt descending
+        select new
+        {
+            report.Id,
+            report.Title,
+            report.Description,
+            report.Service,
+            report.Location,
+            report.Status,
+            report.CreatedAt,
+            report.Version,
+            report.IncidentId,
+
+            LinkedIncident = incident == null
+                ? null
+                : new
+                {
+                    incident.Title,
+                    incident.Status
+                }
+        }
+    ).ToListAsync();
 
     return Results.Ok(reports);
 }).RequireAuthorization();
@@ -241,6 +266,27 @@ app.MapPatch("/api/reports/{id:guid}/status",
     return Results.Ok(report);
 }).RequireAuthorization(policy =>
     policy.RequireRole("Technician", "Admin"));
+
+app.MapIncidentEndpoints();
+app.MapGet("/api/access", (System.Security.Claims.ClaimsPrincipal user) =>
+    Results.Ok(new
+    {
+        canManageIncidents =
+            user.IsInRole("Technician") || user.IsInRole("Admin")
+    }))
+    .RequireAuthorization();
+
+foreach (var url in new[]
+{
+    "http://localhost:5080",
+    "http://localhost:5081"
+})
+{
+    if (!app.Urls.Contains(url))
+    {
+        app.Urls.Add(url);
+    }
+}
 
 app.Run();
 

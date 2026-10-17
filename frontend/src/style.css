@@ -1,1 +1,59 @@
 :root{font-family:system-ui,sans-serif;color:#182941;background:#f3f6fa}*{box-sizing:border-box}body{margin:0}main{max-width:1180px;margin:auto;padding:36px 24px}header,.section-title{display:flex;justify-content:space-between;align-items:center;gap:16px}h1{font-size:30px;margin:0}h1 span{font-size:17px;color:#627089;font-weight:400}.eyebrow{font-size:11px;letter-spacing:2px;color:#25796e;font-weight:700}h2{font-size:19px;margin-top:0}aside{padding:15px;background:#e3eeed;border-radius:8px;margin:24px 0}.layout{display:grid;grid-template-columns:350px 1fr;gap:24px}section{background:white;padding:24px;border:1px solid #dbe2ed;border-radius:12px}label{display:block;font-size:13px;font-weight:600;margin-top:17px}input,textarea,select{display:block;width:100%;margin-top:7px;padding:11px;border:1px solid #c8d1df;border-radius:6px;font:inherit;background:white;color:inherit}textarea{min-height:115px;resize:vertical}button{cursor:pointer;border:0;border-radius:6px;background:#176c61;color:white;padding:11px 16px;font:inherit}form button{margin-top:20px;width:100%}button:disabled{opacity:.6;cursor:wait}.pill{font-size:12px;background:#eef2f8;padding:6px 10px;border-radius:20px;white-space:nowrap}article{padding:20px 0;border-top:1px solid #e2e7ee}article p{white-space:pre-wrap;overflow-wrap:anywhere}article select{max-width:210px}small{color:#627089}.error{padding:16px;background:#ffe8e5;color:#8c2621;margin-bottom:20px;border-radius:8px}@media(max-width:760px){.layout{grid-template-columns:1fr}header{align-items:start;flex-direction:column}h1 span{display:block;margin-top:8px}.section-title{flex-wrap:wrap}}
+.desk-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 24px 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #dce3ed;
+}
+
+.desk-tabs button {
+  width: auto;
+  padding: 10px 20px;
+  border: 1px solid #c8d4e2;
+  border-radius: 8px;
+  background: white;
+  color: #18465f;
+  cursor: pointer;
+}
+
+.desk-tabs button[aria-pressed="true"] {
+  background: #176f65;
+  border-color: #176f65;
+  color: white;
+}
+
+.desk-tabs button:focus-visible {
+  outline: 3px solid #65b9ae;
+  outline-offset: 3px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+details {
+  margin: 16px 0;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 12px 0;
+}
+
+details[open] summary {
+  margin-bottom: 12px;
+}
+
+.linked-incident {
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-left: 3px solid #176f65;
+  border-radius: 6px;
+  background: #edf6f4;
+}
+
+.linked-incident p {
+  margin: 8px 0 0;
+}
