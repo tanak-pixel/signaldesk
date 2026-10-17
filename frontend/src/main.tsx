@@ -28,6 +28,7 @@ async function request<T>(
 ): Promise<T> {
   const response = await authFetch(`${API}${path}`, options);
 
+  // Convert API errors into messages the form and list can display.
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(
@@ -65,6 +66,7 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // The API filters report ownership; this endpoint only controls the UI.
     request<{ canManageIncidents: boolean }>('/api/access')
       .then(access =>
         setCanManage(access.canManageIncidents)
@@ -157,6 +159,7 @@ function App() {
 
   const searchText = search.trim().toLowerCase();
 
+  // Search and dropdown filters refine the already-authorized report list.
   const filteredReports = reports.filter(report => {
     const matchesSearch =
       !searchText ||
@@ -404,6 +407,7 @@ function App() {
                   )}
 
                   {report.linkedIncident && (
+                    // Expose only the linked incident summary returned by the API.
                     <div className="linked-incident">
                       <strong>Related incident</strong>
                       <p>{report.linkedIncident.title}</p>

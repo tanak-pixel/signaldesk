@@ -5,16 +5,24 @@ public static class IncidentEndpoints
 {
     public static void MapIncidentEndpoints(this WebApplication app)
     {
+        // Every incident-management route is restricted to technicians/admins.
         var incidents = app.MapGroup("/api/incidents")
             .RequireAuthorization(policy =>
                 policy.RequireRole("Technician", "Admin"));
 
-        
-        // List incidents with the number of linked reports.
-        incidents.MapGet("", async (SignalDeskDbContext db) =>
+        // List incidents, including assignment details.
+        incidents.MapGet("",
+            async (SignalDeskDbContext db, ClaimsPrincipal user) =>
         {
+            var userId =
+                user.FindFirstValue(ClaimTypes.NameIdentifier);
+
+            if (string.IsNullOrWhiteSpace(userId))
+                return Results.Unauthorized();
+
             var items = await db.Incidents
                 .AsNoTracking()
+                // Return newest incidents first and include list-specific summaries.
                 .OrderByDescending(i => i.CreatedAt)
                 .Select(i => new
                 {
@@ -24,8 +32,20 @@ public static class IncidentEndpoints
                     i.Service,
                     i.Status,
                     i.AssignedTechnicianId,
+
+                    AssignedTechnicianName = db.Users
+                        .Where(u => u.Id == i.AssignedTechnicianId)
+                        .Select(u => u.UserName)
+                        .FirstOrDefault(),
+
+                    IsAssignedToMe =
+                        i.AssignedTechnicianId == userId,
+
                     i.CreatedAt,
+                    i.AcknowledgedAt,
+                    i.ResolvedAt,
                     i.Version,
+
                     ReportCount = db.Reports.Count(
                         r => r.IncidentId == i.Id)
                 })
@@ -41,6 +61,12 @@ public static class IncidentEndpoints
                 SignalDeskDbContext db,
                 ClaimsPrincipal user) =>
         {
+            var userId =
+                user.FindFirstValue(ClaimTypes.NameIdentifier);
+
+            if (string.IsNullOrWhiteSpace(userId))
+                return Results.Unauthorized();
+
             var title = input.Title?.Trim() ?? "";
             var description = input.Description?.Trim() ?? "";
             var service = input.Service?.Trim() ?? "";
@@ -71,26 +97,42 @@ public static class IncidentEndpoints
 
             await AddActivity(
                 db, user, incident.Id,
-                "Created", "Created the incident.");
+                "Created",
+                "Created the incident.");
 
+            // The incident and its initial history entry are saved together.
             await db.SaveChangesAsync();
 
             return Results.Created(
-                $"/api/incidents/{incident.Id}", incident);
+                $"/api/incidents/{incident.Id}",
+                incident);
         });
 
         // View one incident and its linked reports.
         incidents.MapGet("/{id:guid}",
-            async (Guid id, SignalDeskDbContext db) =>
+            async (
+                Guid id,
+                SignalDeskDbContext db,
+                ClaimsPrincipal user) =>
         {
+            var userId =
+                user.FindFirstValue(ClaimTypes.NameIdentifier);
+
+            if (string.IsNullOrWhiteSpace(userId))
+                return Results.Unauthorized();
+
             var incident = await db.Incidents
                 .AsNoTracking()
                 .SingleOrDefaultAsync(i => i.Id == id);
 
             if (incident is null)
-            {
                 return Results.NotFound();
-            }
+
+            var assignedTechnicianName = await db.Users
+                .AsNoTracking()
+                .Where(u => u.Id == incident.AssignedTechnicianId)
+                .Select(u => u.UserName)
+                .FirstOrDefaultAsync();
 
             var reports = await db.Reports
                 .AsNoTracking()
@@ -98,10 +140,17 @@ public static class IncidentEndpoints
                 .OrderByDescending(r => r.CreatedAt)
                 .ToListAsync();
 
-            return Results.Ok(new { incident, reports });
+            return Results.Ok(new
+            {
+                incident,
+                reports,
+                assignedTechnicianName,
+                isAssignedToMe =
+                    incident.AssignedTechnicianId == userId
+            });
         });
 
-        // Link a report without deleting or combining its original contents.
+        // Link a report while preserving its original contents.
         incidents.MapPost("/{id:guid}/reports/{reportId:guid}",
             async (
                 Guid id,
@@ -110,6 +159,12 @@ public static class IncidentEndpoints
                 SignalDeskDbContext db,
                 ClaimsPrincipal user) =>
         {
+            var userId =
+                user.FindFirstValue(ClaimTypes.NameIdentifier);
+
+            if (string.IsNullOrWhiteSpace(userId))
+                return Results.Unauthorized();
+
             var incident = await db.Incidents.FindAsync(id);
 
             if (incident is null)
@@ -124,7 +179,8 @@ public static class IncidentEndpoints
             {
                 return Results.Conflict(new
                 {
-                    message = "Cannot link reports to a resolved incident."
+                    message =
+                        "Cannot link reports to a resolved incident."
                 });
             }
 
@@ -143,7 +199,8 @@ public static class IncidentEndpoints
             {
                 return Results.Conflict(new
                 {
-                    message = "Report or incident changed. Refresh and retry."
+                    message =
+                        "Report or incident changed. Refresh and retry."
                 });
             }
 
@@ -159,7 +216,8 @@ public static class IncidentEndpoints
             {
                 return Results.Conflict(new
                 {
-                    message = "Report already belongs to another incident."
+                    message =
+                        "Report already belongs to another incident."
                 });
             }
 
@@ -167,14 +225,15 @@ public static class IncidentEndpoints
             {
                 return Results.BadRequest(new
                 {
-                    message = "Report and incident must use the same service."
+                    message =
+                        "Report and incident must use the same service."
                 });
             }
 
             report.IncidentId = id;
             report.Version++;
 
-            // Updating both versions checks both records during the save.
+            // Increment both versions so either stale record cancels the link.
             incident.Version++;
 
             await AddActivity(
@@ -190,7 +249,8 @@ public static class IncidentEndpoints
             {
                 return Results.Conflict(new
                 {
-                    message = "Report or incident changed. Refresh and retry."
+                    message =
+                        "Report or incident changed. Refresh and retry."
                 });
             }
 
@@ -211,9 +271,10 @@ public static class IncidentEndpoints
                 ClaimsPrincipal user,
                 SignalDeskDbContext db) =>
         {
-            var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+            var userId =
+                user.FindFirstValue(ClaimTypes.NameIdentifier);
 
-            if (userId is null)
+            if (string.IsNullOrWhiteSpace(userId))
                 return Results.Unauthorized();
 
             var incident = await db.Incidents.FindAsync(id);
@@ -222,25 +283,29 @@ public static class IncidentEndpoints
                 return Results.NotFound();
 
             if (incident.Version != input.Version)
-                return Results.Conflict(new
-                {
-                    message = "Incident changed. Refresh and retry."
-                });
+                return IncidentChanged();
 
             if (incident.Status == "Resolved")
+            {
                 return Results.Conflict(new
                 {
-                    message = "Resolved incidents cannot be assigned."
+                    message =
+                        "Resolved incidents cannot be assigned."
                 });
+            }
 
             if (incident.AssignedTechnicianId is not null &&
                 incident.AssignedTechnicianId != userId)
+            {
                 return Results.Conflict(new
                 {
-                    message = "Another technician already owns this incident."
+                    message =
+                        "Another technician already owns this incident."
                 });
+            }
 
             if (incident.AssignedTechnicianId == userId)
+                // Treat repeating "assign to me" as a no-op, without new history.
                 return Results.Ok(incident);
 
             incident.AssignedTechnicianId = userId;
@@ -248,7 +313,8 @@ public static class IncidentEndpoints
 
             await AddActivity(
                 db, user, incident.Id,
-                "Assigned", "Took ownership of the incident.");
+                "Assigned",
+                "Took ownership of the incident.");
 
             try
             {
@@ -256,28 +322,25 @@ public static class IncidentEndpoints
             }
             catch (DbUpdateConcurrencyException)
             {
-                return Results.Conflict(new
-                {
-                    message = "Incident changed. Refresh and retry."
-                });
+                return IncidentChanged();
             }
 
             return Results.Ok(incident);
         });
 
-        // Update an incident's status.
-        incidents.MapPatch("/{id:guid}/status",
+        // Only the current owner can release an assignment.
+        incidents.MapPatch("/{id:guid}/release-assignment",
             async (
                 Guid id,
-                UpdateIncidentStatus input,
-                SignalDeskDbContext db,
-                ClaimsPrincipal user) =>
+                IncidentVersion input,
+                ClaimsPrincipal user,
+                SignalDeskDbContext db) =>
         {
-            if (input.Status is not ("New" or "Investigating" or "Resolved"))
-                return Results.BadRequest(new
-                {
-                    message = "Choose New, Investigating, or Resolved."
-                });
+            var userId =
+                user.FindFirstValue(ClaimTypes.NameIdentifier);
+
+            if (string.IsNullOrWhiteSpace(userId))
+                return Results.Unauthorized();
 
             var incident = await db.Incidents.FindAsync(id);
 
@@ -285,15 +348,83 @@ public static class IncidentEndpoints
                 return Results.NotFound();
 
             if (incident.Version != input.Version)
+                return IncidentChanged();
+
+            if (incident.AssignedTechnicianId is null)
+            {
                 return Results.Conflict(new
                 {
-                    message = "Incident changed. Refresh and retry."
+                    message = "This incident is already unassigned."
                 });
+            }
+
+            if (incident.AssignedTechnicianId != userId)
+            {
+                return Results.Json(
+                    new
+                    {
+                        message =
+                            "Only the assigned technician can release this assignment."
+                    },
+                    statusCode: StatusCodes.Status403Forbidden);
+            }
+
+            incident.AssignedTechnicianId = null;
+            incident.Version++;
+
+            await AddActivity(
+                db, user, incident.Id,
+                "AssignmentReleased",
+                "Released ownership of the incident.");
+
+            try
+            {
+                await db.SaveChangesAsync();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return IncidentChanged();
+            }
+
+            return Results.Ok(incident);
+        });
+
+        // Update incident status independently of report statuses.
+        incidents.MapPatch("/{id:guid}/status",
+            async (
+                Guid id,
+                UpdateIncidentStatus input,
+                SignalDeskDbContext db,
+                ClaimsPrincipal user) =>
+        {
+            var userId =
+                user.FindFirstValue(ClaimTypes.NameIdentifier);
+
+            if (string.IsNullOrWhiteSpace(userId))
+                return Results.Unauthorized();
+
+            if (input.Status is not ("New" or "Investigating" or "Resolved"))
+            {
+                return Results.BadRequest(new
+                {
+                    message =
+                        "Choose New, Investigating, or Resolved."
+                });
+            }
+
+            var incident = await db.Incidents.FindAsync(id);
+
+            if (incident is null)
+                return Results.NotFound();
+
+            if (incident.Version != input.Version)
+                return IncidentChanged();
 
             if (incident.Status == input.Status)
                 return Results.Ok(incident);
 
             var now = DateTimeOffset.UtcNow;
+            var previousStatus = incident.Status;
 
             if (input.Status == "Investigating")
                 incident.AcknowledgedAt ??= now;
@@ -301,8 +432,7 @@ public static class IncidentEndpoints
             incident.ResolvedAt =
                 input.Status == "Resolved" ? now : null;
 
-            var previousStatus = incident.Status;
-
+            // The incident workflow does not alter the linked reports' statuses.
             incident.Status = input.Status;
             incident.Version++;
 
@@ -317,15 +447,13 @@ public static class IncidentEndpoints
             }
             catch (DbUpdateConcurrencyException)
             {
-                return Results.Conflict(new
-                {
-                    message = "Incident changed. Refresh and retry."
-                });
+                return IncidentChanged();
             }
 
             return Results.Ok(incident);
         });
 
+        // Technician-only activity timeline.
         incidents.MapGet("/{id:guid}/activity",
             async (Guid id, SignalDeskDbContext db) =>
         {
@@ -335,6 +463,7 @@ public static class IncidentEndpoints
             var activities = await db.IncidentActivities
                 .AsNoTracking()
                 .Where(a => a.IncidentId == id)
+                // Use the ID as a stable tie-breaker for entries with equal times.
                 .OrderByDescending(a => a.CreatedAt)
                 .ThenByDescending(a => a.Id)
                 .Select(a => new
@@ -351,6 +480,15 @@ public static class IncidentEndpoints
         });
     }
 
+    private static IResult IncidentChanged()
+    {
+        return Results.Conflict(new
+        {
+            message = "Incident changed. Refresh and retry."
+        });
+    }
+
+    // Adds history to the same SaveChanges transaction as the change.
     private static async Task AddActivity(
         SignalDeskDbContext db,
         ClaimsPrincipal user,
@@ -358,13 +496,16 @@ public static class IncidentEndpoints
         string action,
         string message)
     {
-        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+        var userId =
+            user.FindFirstValue(ClaimTypes.NameIdentifier);
 
         var actorName = await db.Users
+            .AsNoTracking()
             .Where(u => u.Id == userId)
             .Select(u => u.UserName)
             .FirstOrDefaultAsync();
 
+        // Keep a display-name snapshot rather than exposing the user's account ID.
         db.IncidentActivities.Add(new IncidentActivity
         {
             Id = Guid.NewGuid(),

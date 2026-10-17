@@ -2,7 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 
 export const API = 'http://localhost:5080';
 
-// Keep the token in memory. Refreshing the page requires signing in again.
+// Keep the short-lived token in memory; a page refresh requires signing in again.
 let accessToken: string | null = null;
 
 export function authFetch(
@@ -11,6 +11,7 @@ export function authFetch(
 ): Promise<Response> {
   const headers = new Headers(options.headers);
 
+  // Centralize bearer-token attachment so authenticated API calls stay consistent.
   if (accessToken) {
     headers.set('Authorization', `Bearer ${accessToken}`);
   }
@@ -56,6 +57,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
       accessToken = result.accessToken;
 
+      // Confirm the token works before showing the protected application.
       const identity = await authFetch(`${API}/api/me`);
 
       if (!identity.ok) {

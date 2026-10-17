@@ -8,6 +8,8 @@ type Incident = {
   service: string;
   status: string;
   assignedTechnicianId: string | null;
+  assignedTechnicianName: string | null;
+  isAssignedToMe: boolean;
   version: number;
   reportCount: number;
 };
@@ -20,6 +22,11 @@ type Report = {
   incidentId: string | null;
 };
 
+type IncidentAction =
+  | 'assign-to-me'
+  | 'release-assignment'
+  | 'status';
+
 async function readJson<T>(
   path: string,
   options?: RequestInit
@@ -28,6 +35,7 @@ async function readJson<T>(
 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
+
     throw new Error(
       body.message ?? `Request failed (${response.status}).`
     );
@@ -44,6 +52,7 @@ export default function IncidentPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+
   const [incidentId, setIncidentId] = useState('');
   const [reportId, setReportId] = useState('');
 
@@ -55,6 +64,7 @@ export default function IncidentPanel() {
   async function load() {
     const response = await authFetch(`${API}/api/incidents`);
 
+    // The API remains the security boundary; hide management data for reporters.
     if (response.status === 403) {
       setAllowed(false);
       setIncidents([]);
@@ -75,11 +85,36 @@ export default function IncidentPanel() {
     setIncidents(items);
     setReports(reportItems);
     setAllowed(true);
+
+    // Clear stale form choices after another action changes available records.
+    setIncidentId(current => {
+      const stillAvailable = items.some(
+        incident =>
+          incident.id === current &&
+          incident.status !== 'Resolved'
+      );
+
+      return stillAvailable ? current : '';
+    });
+
+    setReportId(current => {
+      const stillAvailable = reportItems.some(
+        report => report.id === current && !report.incidentId
+      );
+
+      return stillAvailable ? current : '';
+    });
   }
 
   useEffect(() => {
     load()
-      .catch(err => setError(err.message))
+      .catch(err =>
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Cannot load incidents.'
+        )
+      )
       .finally(() => setLoading(false));
   }, []);
 
@@ -125,7 +160,19 @@ export default function IncidentPanel() {
     const report =
       reports.find(item => item.id === reportId);
 
-    if (!incident || !report) return;
+    // Check eligibility in the UI for quick feedback; the API validates it too.
+    if (
+      !incident ||
+      !report ||
+      incident.status === 'Resolved' ||
+      report.incidentId ||
+      report.service !== incident.service
+    ) {
+      setError(
+        'Choose an open incident and an unlinked report with the same service.'
+      );
+      return;
+    }
 
     setBusy(true);
     setError('');
@@ -152,6 +199,7 @@ export default function IncidentPanel() {
         err instanceof Error ? err.message : 'Linking failed.'
       );
 
+      // Reload current versions so a stale update can be retried safely.
       await load().catch(() => {});
     } finally {
       setBusy(false);
@@ -160,7 +208,7 @@ export default function IncidentPanel() {
 
   async function updateIncident(
     incident: Incident,
-    action: 'assign-to-me' | 'status',
+    action: IncidentAction,
     nextStatus?: string
   ) {
     setBusy(true);
@@ -184,20 +232,17 @@ export default function IncidentPanel() {
 
       await load();
 
-      if (
-        action === 'status' &&
-        nextStatus === 'Resolved' &&
-        incidentId === incident.id
-      ) {
-        setIncidentId('');
-        setReportId('');
+      switch (action) {
+        case 'assign-to-me':
+          setNotice('Incident assigned to you.');
+          break;
+        case 'release-assignment':
+          setNotice('Assignment released.');
+          break;
+        case 'status':
+          setNotice('Incident status updated.');
+          break;
       }
-
-      setNotice(
-        action === 'assign-to-me'
-          ? 'Incident assigned to you.'
-          : 'Incident status updated.'
-      );
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Update failed.'
@@ -238,13 +283,15 @@ export default function IncidentPanel() {
     incidents.find(incident => incident.id === incidentId);
 
   const availableReports = reports.filter(report =>
-    selectedIncident?.status !== 'Resolved' &&
+    selectedIncident &&
+    selectedIncident.status !== 'Resolved' &&
     !report.incidentId &&
-    report.service === selectedIncident?.service
+    report.service === selectedIncident.service
   );
 
   const searchText = search.trim().toLowerCase();
 
+  // These filters only affect the displayed list; the API still enforces access.
   const filteredIncidents = incidents.filter(incident => {
     const matchesSearch =
       !searchText ||
@@ -261,6 +308,7 @@ export default function IncidentPanel() {
 
     const matchesAssignment =
       !assignmentFilter ||
+      (assignmentFilter === 'mine' && incident.isAssignedToMe) ||
       (assignmentFilter === 'assigned' && isAssigned) ||
       (assignmentFilter === 'unassigned' && !isAssigned);
 
@@ -272,6 +320,10 @@ export default function IncidentPanel() {
     );
   });
 
+  const myIncidentCount = incidents.filter(
+    incident => incident.isAssignedToMe
+  ).length;
+
   if (loading) {
     return <p role="status">Loading incidents…</p>;
   }
@@ -279,7 +331,14 @@ export default function IncidentPanel() {
   if (!allowed) {
     return error ? (
       <div role="alert" className="error">
-        {error}
+        <p>{error}</p>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={refreshAll}
+        >
+          Retry
+        </button>
       </div>
     ) : null;
   }
@@ -388,7 +447,9 @@ export default function IncidentPanel() {
         </label>
 
         {selectedIncident && availableReports.length === 0 && (
-          <p>No unlinked reports match this incident’s service.</p>
+          <p>
+            No unlinked reports match this incident’s service.
+          </p>
         )}
 
         <button
@@ -470,6 +531,9 @@ export default function IncidentPanel() {
             }
           >
             <option value="">All assignments</option>
+            <option value="mine">
+              My incidents ({myIncidentCount})
+            </option>
             <option value="assigned">Assigned</option>
             <option value="unassigned">Unassigned</option>
           </select>
@@ -508,9 +572,17 @@ export default function IncidentPanel() {
 
             <p>
               Assignment:{' '}
-              {incident.assignedTechnicianId
-                ? 'Assigned'
-                : 'Unassigned'}
+              {incident.isAssignedToMe ? (
+                <span className="pill">Assigned to you</span>
+              ) : incident.assignedTechnicianId ? (
+                <span>
+                  Assigned to{' '}
+                  {incident.assignedTechnicianName ??
+                    'another technician'}
+                </span>
+              ) : (
+                <span className="pill">Unassigned</span>
+              )}
             </p>
 
             {!incident.assignedTechnicianId &&
@@ -525,6 +597,21 @@ export default function IncidentPanel() {
                   Assign to me
                 </button>
               )}
+
+            {incident.isAssignedToMe && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  updateIncident(
+                    incident,
+                    'release-assignment'
+                  )
+                }
+              >
+                Release assignment
+              </button>
+            )}
 
             <label>
               Incident status
@@ -560,11 +647,9 @@ export default function IncidentPanel() {
               incidentId={incident.id}
               version={incident.version}
             />
-            
           </article>
         ))
       )}
     </section>
   );
-  
 }

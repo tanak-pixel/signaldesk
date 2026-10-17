@@ -24,6 +24,7 @@ export default function IncidentTimeline({
   useEffect(() => {
     if (!open) return;
 
+    // Ignore late responses when the panel closes or its incident changes.
     let cancelled = false;
     setLoading(true);
     setError('');
@@ -61,6 +62,7 @@ export default function IncidentTimeline({
     return () => {
       cancelled = true;
     };
+  // Refresh an open timeline after incident changes or an explicit retry.
   }, [incidentId, version, open, retry]);
 
   return (

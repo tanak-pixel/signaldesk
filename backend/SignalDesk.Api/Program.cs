@@ -4,6 +4,7 @@ using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Keep database credentials in configuration or user secrets, not source code.
 var connectionString =
     builder.Configuration.GetConnectionString("SignalDesk")
     ?? throw new InvalidOperationException(
@@ -12,6 +13,7 @@ var connectionString =
 builder.Services.AddDbContext<SignalDeskDbContext>(options =>
     options.UseNpgsql(connectionString));
 
+// Permit the local Vite development server to call this API from the browser.
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -27,6 +29,7 @@ builder.Services.AddCors(options =>
 builder.Services
     .AddIdentityApiEndpoints<ApplicationUser>(options =>
     {
+        // Require unique account emails and a stronger local password.
         options.User.RequireUniqueEmail = true;
         options.Password.RequiredLength = 12;
     })
@@ -45,7 +48,7 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseCors();
-// Local development setup for an existing technician account.
+// Optionally grant the Technician role to a pre-registered local account.
 var technicianEmail =
     builder.Configuration["Development:TechnicianEmail"];
     
@@ -127,6 +130,7 @@ app.MapGet("/api/reports",
 
     var query = db.Reports.AsNoTracking();
 
+    // Apply ownership filtering before joining incident details.
     var canReviewAll =
         user.IsInRole("Technician") || user.IsInRole("Admin");
 
@@ -154,6 +158,7 @@ app.MapGet("/api/reports",
             report.Version,
             report.IncidentId,
 
+            // Reporters receive only public incident summary fields here.
             LinkedIncident = incident == null
                 ? null
                 : new
@@ -199,6 +204,7 @@ app.MapPost("/api/reports",
         });
     }
 
+    // Assign ownership to the authenticated reporter, never to request input.
     var report = new SupportReport
     {
         Id = Guid.NewGuid(),
@@ -248,6 +254,7 @@ app.MapPatch("/api/reports/{id:guid}/status",
         });
     }
 
+    // EF compares the original version at save time to catch concurrent writes.
     report.Status = input.Status;
     report.Version++;
 
@@ -268,6 +275,8 @@ app.MapPatch("/api/reports/{id:guid}/status",
     policy.RequireRole("Technician", "Admin"));
 
 app.MapIncidentEndpoints();
+
+// Lets the frontend tailor controls to the signed-in user's role.
 app.MapGet("/api/access", (System.Security.Claims.ClaimsPrincipal user) =>
     Results.Ok(new
     {
@@ -278,6 +287,7 @@ app.MapGet("/api/access", (System.Security.Claims.ClaimsPrincipal user) =>
 
 foreach (var url in new[]
 {
+    // Support both API URLs used during local development.
     "http://localhost:5080",
     "http://localhost:5081"
 })

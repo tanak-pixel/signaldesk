@@ -12,6 +12,7 @@ export const emptyFilters: Filters = {
   assignment: ''
 };
 
+// Assignment filtering is optional because reports do not have assignments.
 type Props = {
   value: Filters;
   onChange: (value: Filters) => void;
@@ -26,6 +27,7 @@ export default function ListFilters({
   searchPlaceholder
 }: Props) {
   function change(key: keyof Filters, next: string) {
+    // Keep the other filter values when one control changes.
     onChange({ ...value, [key]: next });
   }
 
