@@ -57,3 +57,42 @@ details[open] summary {
 .linked-incident p {
   margin: 8px 0 0;
 }
+
+.list-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.list-filters label {
+  flex: 1 1 140px;
+  min-width: 0;
+  margin: 0;
+}
+
+.list-filters label:first-child {
+  flex: 2 1 220px;
+}
+
+.list-filters input,
+.list-filters select {
+  box-sizing: border-box;
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.list-filters .clear-filters {
+  flex: 0 0 auto;
+  width: auto;
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .list-filters label,
+  .list-filters label:first-child,
+  .list-filters .clear-filters {
+    flex: 1 1 100%;
+  }
+}

@@ -40,18 +40,25 @@ export default function IncidentPanel() {
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [reports, setReports] = useState<Report[]>([]);
   const [allowed, setAllowed] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [incidentId, setIncidentId] = useState('');
   const [reportId, setReportId] = useState('');
 
+  const [search, setSearch] = useState('');
+  const [serviceFilter, setServiceFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [assignmentFilter, setAssignmentFilter] = useState('');
+
   async function load() {
     const response = await authFetch(`${API}/api/incidents`);
 
-    // Ordinary reporters do not get an incident-management panel.
     if (response.status === 403) {
       setAllowed(false);
+      setIncidents([]);
+      setReports([]);
       return;
     }
 
@@ -62,7 +69,8 @@ export default function IncidentPanel() {
     }
 
     const items: Incident[] = await response.json();
-    const reportItems = await readJson<Report[]>('/api/reports');
+    const reportItems =
+      await readJson<Report[]>('/api/reports');
 
     setIncidents(items);
     setReports(reportItems);
@@ -70,10 +78,14 @@ export default function IncidentPanel() {
   }
 
   useEffect(() => {
-    load().catch(err => setError(err.message));
+    load()
+      .catch(err => setError(err.message))
+      .finally(() => setLoading(false));
   }, []);
 
-  async function createIncident(event: FormEvent<HTMLFormElement>) {
+  async function createIncident(
+    event: FormEvent<HTMLFormElement>
+  ) {
     event.preventDefault();
 
     const form = event.currentTarget;
@@ -102,11 +114,16 @@ export default function IncidentPanel() {
     }
   }
 
-  async function linkReport(event: FormEvent<HTMLFormElement>) {
+  async function linkReport(
+    event: FormEvent<HTMLFormElement>
+  ) {
     event.preventDefault();
 
-    const incident = incidents.find(i => i.id === incidentId);
-    const report = reports.find(r => r.id === reportId);
+    const incident =
+      incidents.find(item => item.id === incidentId);
+
+    const report =
+      reports.find(item => item.id === reportId);
 
     if (!incident || !report) return;
 
@@ -135,7 +152,6 @@ export default function IncidentPanel() {
         err instanceof Error ? err.message : 'Linking failed.'
       );
 
-      // Fetch current versions after a conflict.
       await load().catch(() => {});
     } finally {
       setBusy(false);
@@ -152,16 +168,30 @@ export default function IncidentPanel() {
     setNotice('');
 
     try {
-      await readJson(`/api/incidents/${incident.id}/${action}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          version: incident.version,
-          ...(action === 'status' ? { status: nextStatus } : {})
-        })
-      });
+      await readJson(
+        `/api/incidents/${incident.id}/${action}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            version: incident.version,
+            ...(action === 'status'
+              ? { status: nextStatus }
+              : {})
+          })
+        }
+      );
 
       await load();
+
+      if (
+        action === 'status' &&
+        nextStatus === 'Resolved' &&
+        incidentId === incident.id
+      ) {
+        setIncidentId('');
+        setReportId('');
+      }
 
       setNotice(
         action === 'assign-to-me'
@@ -179,27 +209,96 @@ export default function IncidentPanel() {
     }
   }
 
+  async function refreshAll() {
+    setBusy(true);
+    setError('');
+    setNotice('');
+
+    try {
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Cannot refresh incidents.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function clearFilters() {
+    setSearch('');
+    setServiceFilter('');
+    setStatusFilter('');
+    setAssignmentFilter('');
+  }
+
   const selectedIncident =
-    incidents.find(i => i.id === incidentId);
+    incidents.find(incident => incident.id === incidentId);
 
   const availableReports = reports.filter(report =>
+    selectedIncident?.status !== 'Resolved' &&
     !report.incidentId &&
     report.service === selectedIncident?.service
   );
 
+  const searchText = search.trim().toLowerCase();
+
+  const filteredIncidents = incidents.filter(incident => {
+    const matchesSearch =
+      !searchText ||
+      incident.title.toLowerCase().includes(searchText);
+
+    const matchesService =
+      !serviceFilter || incident.service === serviceFilter;
+
+    const matchesStatus =
+      !statusFilter || incident.status === statusFilter;
+
+    const isAssigned =
+      Boolean(incident.assignedTechnicianId);
+
+    const matchesAssignment =
+      !assignmentFilter ||
+      (assignmentFilter === 'assigned' && isAssigned) ||
+      (assignmentFilter === 'unassigned' && !isAssigned);
+
+    return (
+      matchesSearch &&
+      matchesService &&
+      matchesStatus &&
+      matchesAssignment
+    );
+  });
+
+  if (loading) {
+    return <p role="status">Loading incidents…</p>;
+  }
+
   if (!allowed) {
-    return error ? <div role="alert" className="error">{error}</div> : null;
+    return error ? (
+      <div role="alert" className="error">
+        {error}
+      </div>
+    ) : null;
   }
 
   return (
     <section style={{ marginTop: 24 }}>
       <h2>Incident coordination</h2>
 
-      {error && <div role="alert" className="error">{error}</div>}
+      {error && (
+        <div role="alert" className="error">
+          {error}
+        </div>
+      )}
+
       {notice && <p role="status">{notice}</p>}
 
       <details>
         <summary>Create an incident</summary>
+
         <form onSubmit={createIncident}>
           <label>
             Title
@@ -244,6 +343,7 @@ export default function IncidentPanel() {
           Incident
           <select
             required
+            disabled={busy}
             value={incidentId}
             onChange={event => {
               setIncidentId(event.target.value);
@@ -251,10 +351,16 @@ export default function IncidentPanel() {
             }}
           >
             <option value="">Choose an incident</option>
+
             {incidents
-              .filter(incident => incident.status !== 'Resolved')
+              .filter(incident =>
+                incident.status !== 'Resolved'
+              )
               .map(incident => (
-                <option key={incident.id} value={incident.id}>
+                <option
+                  key={incident.id}
+                  value={incident.id}
+                >
                   {incident.title} — {incident.service}
                 </option>
               ))}
@@ -265,10 +371,14 @@ export default function IncidentPanel() {
           Unlinked report with matching service
           <select
             required
+            disabled={busy || !selectedIncident}
             value={reportId}
-            onChange={event => setReportId(event.target.value)}
+            onChange={event =>
+              setReportId(event.target.value)
+            }
           >
             <option value="">Choose a report</option>
+
             {availableReports.map(report => (
               <option key={report.id} value={report.id}>
                 {report.title}
@@ -277,78 +387,184 @@ export default function IncidentPanel() {
           </select>
         </label>
 
-        <button disabled={busy || !incidentId || !reportId}>
+        {selectedIncident && availableReports.length === 0 && (
+          <p>No unlinked reports match this incident’s service.</p>
+        )}
+
+        <button
+          disabled={
+            busy ||
+            !selectedIncident ||
+            selectedIncident.status === 'Resolved' ||
+            !availableReports.some(report =>
+              report.id === reportId
+            )
+          }
+        >
           Link report
         </button>
       </form>
 
-      <h3>Incidents ({incidents.length})</h3>
+      <div className="section-title">
+        <h3>Incidents</h3>
 
-      <button
-        disabled={busy}
-        onClick={() => {
-          setError('');
-          load().catch(err => setError(err.message));
-        }}
-      >
-        Refresh incidents and reports
-      </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={refreshAll}
+        >
+          Refresh incidents and reports
+        </button>
+      </div>
 
-      {incidents.map(incident => (
-        <article key={incident.id}>
-          <strong>{incident.title}</strong>
-          <p>
-            {incident.service} · {incident.status} ·
-            {' '}{incident.reportCount} linked reports
-          </p>
-
-          <p>
-            Assignment: {incident.assignedTechnicianId
-              ? 'Assigned'
-              : 'Unassigned'}
-          </p>
-
-          {!incident.assignedTechnicianId &&
-            incident.status !== 'Resolved' && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => updateIncident(incident, 'assign-to-me')}
-              >
-                Assign to me
-              </button>
-            )}
-
-          <label>
-            Incident status
-            <select
-              aria-label={`Incident status for ${incident.title}`}
-              value={incident.status}
-              disabled={busy}
-              onChange={event =>
-                updateIncident(incident, 'status', event.target.value)
-              }
-            >
-              <option>New</option>
-              <option>Investigating</option>
-              <option>Resolved</option>
-            </select>
-          </label>
-
-          <ul>
-            {reports
-              .filter(report => report.incidentId === incident.id)
-              .map(report => (
-                <li key={report.id}>{report.title}</li>
-              ))}
-          </ul>
-
-          <IncidentTimeline
-            incidentId={incident.id}
-            version={incident.version}
+      <div className="list-filters">
+        <label>
+          Search
+          <input
+            type="search"
+            value={search}
+            placeholder="Search incident title"
+            onChange={event =>
+              setSearch(event.target.value)
+            }
           />
-        </article>
-      ))}
+        </label>
+
+        <label>
+          Service
+          <select
+            value={serviceFilter}
+            onChange={event =>
+              setServiceFilter(event.target.value)
+            }
+          >
+            <option value="">All services</option>
+            <option>Wi-Fi</option>
+            <option>Email</option>
+            <option>Printing</option>
+            <option>Other</option>
+          </select>
+        </label>
+
+        <label>
+          Status
+          <select
+            value={statusFilter}
+            onChange={event =>
+              setStatusFilter(event.target.value)
+            }
+          >
+            <option value="">All statuses</option>
+            <option>New</option>
+            <option>Investigating</option>
+            <option>Resolved</option>
+          </select>
+        </label>
+
+        <label>
+          Assignment
+          <select
+            value={assignmentFilter}
+            onChange={event =>
+              setAssignmentFilter(event.target.value)
+            }
+          >
+            <option value="">All assignments</option>
+            <option value="assigned">Assigned</option>
+            <option value="unassigned">Unassigned</option>
+          </select>
+        </label>
+
+        <button
+          type="button"
+          className="clear-filters"
+          onClick={clearFilters}
+        >
+          Clear filters
+        </button>
+      </div>
+
+      <p role="status">
+        Showing {filteredIncidents.length} of{' '}
+        {incidents.length} incidents
+      </p>
+
+      {incidents.length === 0 ? (
+        <p>No incidents yet. Create the first one above.</p>
+      ) : filteredIncidents.length === 0 ? (
+        <p>
+          No incidents match your filters. Try clearing them.
+        </p>
+      ) : (
+        filteredIncidents.map(incident => (
+          <article key={incident.id}>
+            <strong>{incident.title}</strong>
+
+            <p>
+              {incident.service} · {incident.status} ·{' '}
+              {incident.reportCount} linked{' '}
+              {incident.reportCount === 1 ? 'report' : 'reports'}
+            </p>
+
+            <p>
+              Assignment:{' '}
+              {incident.assignedTechnicianId
+                ? 'Assigned'
+                : 'Unassigned'}
+            </p>
+
+            {!incident.assignedTechnicianId &&
+              incident.status !== 'Resolved' && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    updateIncident(incident, 'assign-to-me')
+                  }
+                >
+                  Assign to me
+                </button>
+              )}
+
+            <label>
+              Incident status
+              <select
+                aria-label={`Incident status for ${incident.title}`}
+                value={incident.status}
+                disabled={busy}
+                onChange={event =>
+                  updateIncident(
+                    incident,
+                    'status',
+                    event.target.value
+                  )
+                }
+              >
+                <option>New</option>
+                <option>Investigating</option>
+                <option>Resolved</option>
+              </select>
+            </label>
+
+            <ul>
+              {reports
+                .filter(report =>
+                  report.incidentId === incident.id
+                )
+                .map(report => (
+                  <li key={report.id}>{report.title}</li>
+                ))}
+            </ul>
+
+            <IncidentTimeline
+              incidentId={incident.id}
+              version={incident.version}
+            />
+            
+          </article>
+        ))
+      )}
     </section>
   );
+  
 }
