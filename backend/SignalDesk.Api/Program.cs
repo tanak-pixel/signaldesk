@@ -275,6 +275,8 @@ app.MapPatch("/api/reports/{id:guid}/status",
     policy.RequireRole("Technician", "Admin"));
 
 app.MapIncidentEndpoints();
+app.MapIncidentSuggestionEndpoints();
+
 
 // Lets the frontend tailor controls to the signed-in user's role.
 app.MapGet("/api/access", (System.Security.Claims.ClaimsPrincipal user) =>

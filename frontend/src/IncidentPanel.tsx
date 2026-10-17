@@ -1,3 +1,4 @@
+import IncidentSuggestions from './IncidentSuggestions';
 import { useEffect, useState, type FormEvent } from 'react';
 import { API, authFetch } from './AuthGate';
 import IncidentTimeline from './IncidentTimeline';
@@ -642,7 +643,13 @@ export default function IncidentPanel() {
                   <li key={report.id}>{report.title}</li>
                 ))}
             </ul>
-
+            <IncidentSuggestions
+              incidentId={incident.id}
+              version={incident.version}
+              status={incident.status}
+              disabled={busy}
+              onLinked={load}
+            />
             <IncidentTimeline
               incidentId={incident.id}
               version={incident.version}
