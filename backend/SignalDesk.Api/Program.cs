@@ -13,10 +13,16 @@ builder.Services.AddDbContext<SignalDeskDbContext>(options =>
     options.UseNpgsql(connectionString));
 
 builder.Services.AddCors(options =>
+{
     options.AddDefaultPolicy(policy =>
-        policy.WithOrigins("http://localhost:5173, http://localhost:5174")
+    {
+        policy.WithOrigins(
+                "http://localhost:5173",
+                "http://localhost:5174")
             .AllowAnyHeader()
-            .AllowAnyMethod()));
+            .AllowAnyMethod();
+    });
+});
 
 builder.Services
     .AddIdentityApiEndpoints<ApplicationUser>(options =>
@@ -42,7 +48,7 @@ app.UseCors();
 // Local development setup for an existing technician account.
 var technicianEmail =
     builder.Configuration["Development:TechnicianEmail"];
-
+    
 if (app.Environment.IsDevelopment() &&
     !string.IsNullOrWhiteSpace(technicianEmail))
 {
