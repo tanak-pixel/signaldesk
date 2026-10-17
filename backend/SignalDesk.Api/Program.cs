@@ -299,11 +299,12 @@ foreach (var url in new[]
 }
 
 app.Run();
-
+// The following record types are used to bind JSON request bodies to strongly typed parameters in the API endpoints.
 record CreateReport(
     string? Title,
     string? Description,
     string? Service,
     string? Location);
-
+// The version number is used to detect concurrent updates to the same report.  
 record ChangeStatus(string? Status, int Version);
+public partial class Program { }
