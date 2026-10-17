@@ -236,6 +236,9 @@ namespace SignalDesk.Api.Migrations
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
 
+                    b.Property<string>("ReporterId")
+                        .HasColumnType("text");
+
                     b.Property<string>("Service")
                         .IsRequired()
                         .HasMaxLength(30)
@@ -258,6 +261,8 @@ namespace SignalDesk.Api.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CreatedAt");
+
+                    b.HasIndex("ReporterId");
 
                     b.ToTable("Reports");
                 });
@@ -311,6 +316,14 @@ namespace SignalDesk.Api.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("SupportReport", b =>
+                {
+                    b.HasOne("ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("ReporterId")
+                        .OnDelete(DeleteBehavior.SetNull);
                 });
 #pragma warning restore 612, 618
         }

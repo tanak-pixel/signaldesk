@@ -15,6 +15,10 @@ public class SignalDeskDbContext(
         var report = modelBuilder.Entity<SupportReport>();
 
         report.HasKey(r => r.Id);
+        report.HasOne<ApplicationUser>()
+            .WithMany()
+            .HasForeignKey(r => r.ReporterId)
+            .OnDelete(DeleteBehavior.SetNull);
         report.Property(r => r.Title).HasMaxLength(120);
         report.Property(r => r.Description).HasMaxLength(2000);
         report.Property(r => r.Service).HasMaxLength(30);

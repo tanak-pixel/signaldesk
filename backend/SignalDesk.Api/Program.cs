@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,9 +14,10 @@ builder.Services.AddDbContext<SignalDeskDbContext>(options =>
 
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy =>
-        policy.WithOrigins("http://localhost:5173")
+        policy.WithOrigins("http://localhost:5173, http://localhost:5174")
             .AllowAnyHeader()
             .AllowAnyMethod()));
+
 builder.Services
     .AddIdentityApiEndpoints<ApplicationUser>(options =>
     {
@@ -30,7 +31,7 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-// Authentication and permissions are still a later milestone.
+// Keep this learning version local until deployment is configured.
 if (!app.Environment.IsDevelopment())
 {
     throw new InvalidOperationException(
@@ -38,11 +39,66 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+// Local development setup for an existing technician account.
+var technicianEmail =
+    builder.Configuration["Development:TechnicianEmail"];
+
+if (app.Environment.IsDevelopment() &&
+    !string.IsNullOrWhiteSpace(technicianEmail))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+
+    var roleManager =
+        scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
+
+    var userManager =
+        scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+
+    const string roleName = "Technician";
+
+    if (!await roleManager.RoleExistsAsync(roleName))
+    {
+        var result = await roleManager.CreateAsync(
+            new IdentityRole(roleName));
+
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException(
+                string.Join("; ", result.Errors.Select(e => e.Description)));
+        }
+    }
+
+    var technician = await userManager.FindByEmailAsync(technicianEmail);
+
+    if (technician is null)
+    {
+        throw new InvalidOperationException(
+            "Register the configured technician account before starting.");
+    }
+
+    if (!await userManager.IsInRoleAsync(technician, roleName))
+    {
+        var result = await userManager.AddToRoleAsync(
+            technician, roleName);
+
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException(
+                string.Join("; ", result.Errors.Select(e => e.Description)));
+        }
+    }
+}
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Registration and login endpoints.
 app.MapGroup("/auth").MapIdentityApi<ApplicationUser>();
 
+// Public health check.
+app.MapGet("/health", () =>
+    Results.Ok(new { status = "healthy" }));
+
+// Return the signed-in account.
 app.MapGet("/api/me", (ClaimsPrincipal user) =>
     Results.Ok(new
     {
@@ -51,22 +107,49 @@ app.MapGet("/api/me", (ClaimsPrincipal user) =>
     }))
     .RequireAuthorization();
 
-app.MapGet("/health", () =>
-    Results.Ok(new { status = "healthy" }));
-
-app.MapGet("/api/reports", async (SignalDeskDbContext db) =>
+// Reporters see their own reports.
+// Technicians and admins can see all reports.
+app.MapGet("/api/reports",
+    async (SignalDeskDbContext db, ClaimsPrincipal user) =>
 {
-    var reports = await db.Reports
-        .AsNoTracking()
+    var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+
+    if (string.IsNullOrEmpty(userId))
+    {
+        return Results.Unauthorized();
+    }
+
+    var query = db.Reports.AsNoTracking();
+
+    var canReviewAll =
+        user.IsInRole("Technician") || user.IsInRole("Admin");
+
+    if (!canReviewAll)
+    {
+        query = query.Where(r => r.ReporterId == userId);
+    }
+
+    var reports = await query
         .OrderByDescending(r => r.CreatedAt)
         .ToListAsync();
 
     return Results.Ok(reports);
-});
+}).RequireAuthorization();
 
+// STEP 4: Create a report owned by the signed-in account.
 app.MapPost("/api/reports",
-    async (CreateReport input, SignalDeskDbContext db) =>
+    async (
+        CreateReport input,
+        SignalDeskDbContext db,
+        ClaimsPrincipal user) =>
 {
+    var userId = user.FindFirstValue(ClaimTypes.NameIdentifier);
+
+    if (string.IsNullOrEmpty(userId))
+    {
+        return Results.Unauthorized();
+    }
+
     var title = input.Title?.Trim() ?? "";
     var description = input.Description?.Trim() ?? "";
     var service = input.Service?.Trim() ?? "";
@@ -88,6 +171,7 @@ app.MapPost("/api/reports",
     var report = new SupportReport
     {
         Id = Guid.NewGuid(),
+        ReporterId = userId,
         Title = title,
         Description = description,
         Service = service,
@@ -101,14 +185,21 @@ app.MapPost("/api/reports",
     await db.SaveChangesAsync();
 
     return Results.Created($"/api/reports/{report.Id}", report);
-});
+}).RequireAuthorization();
 
+// STEP 5: Only technicians and admins can change report status.
 app.MapPatch("/api/reports/{id:guid}/status",
-    async (Guid id, ChangeStatus input, SignalDeskDbContext db) =>
+    async (
+        Guid id,
+        ChangeStatus input,
+        SignalDeskDbContext db) =>
 {
     if (input.Status is not ("New" or "Investigating" or "Resolved"))
     {
-        return Results.BadRequest(new { message = "Unknown status." });
+        return Results.BadRequest(new
+        {
+            message = "Unknown status."
+        });
     }
 
     var report = await db.Reports.FindAsync(id);
@@ -142,7 +233,8 @@ app.MapPatch("/api/reports/{id:guid}/status",
     }
 
     return Results.Ok(report);
-});
+}).RequireAuthorization(policy =>
+    policy.RequireRole("Technician", "Admin"));
 
 app.Run();
 

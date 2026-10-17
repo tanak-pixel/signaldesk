@@ -8,4 +8,5 @@ public class SupportReport
     public string Status { get; set; } = "New";
     public DateTimeOffset CreatedAt { get; set; }
     public int Version { get; set; } = 1;
+    public string? ReporterId { get; set; }
 }
