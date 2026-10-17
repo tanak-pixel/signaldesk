@@ -2,160 +2,500 @@
 
 Turn scattered IT reports into a coordinated incident response.
 
-## Current scope — lesson 1
+SignalDesk is a campus IT reporting and incident-management application built
+with React, TypeScript, ASP.NET Core 10, and PostgreSQL.
 
-React + TypeScript frontend and ASP.NET Core 10 API. Submit reports, list reports,
-and change status. Version numbers reject stale updates with HTTP 409.
-This is a learning starter, not the completed incident platform.
+Reporters submit issues and follow related incident progress. Technicians
+group reports into incidents, take ownership, update statuses, and review
+activity history.
 
-**Local development only:** data lives in memory and is lost on API restart.
-There are no accounts, organization permissions, incidents, SignalR, or notifications yet.
-The API refuses to start outside Development. Use fictional reports only.
+## Project status
 
-## Install on Windows
+SignalDesk currently runs locally. GitHub hosts the source code, and
+GitHub Actions runs the API integration tests and frontend build on
+pushes and pull requests.
 
-Install VS Code, Git, Node.js 24 LTS, and the .NET 10 **SDK** (not only the runtime).
-Install the C# Dev Kit extension in VS Code. Docker Desktop and PostgreSQL are for lesson 2.
-Verify in a new PowerShell window:
+There is no publicly hosted application yet.
+
+## Features
+
+### Reporter workflow
+
+- Sign in with an existing account.
+- Submit reports for Wi-Fi, Email, Printing, or Other services.
+- View only reports belonging to the signed-in account.
+- Search reports by title or location.
+- Filter reports by service and status.
+- View the title and status of a linked incident.
+
+### Technician workflow
+
+- View reports across accounts.
+- Change report statuses: New, Investigating, and Resolved.
+- Create incidents and link matching-service reports.
+- Preserve each report's original contents when linking.
+- Assign an incident to the signed-in technician.
+- See technician usernames and “Assigned to you” labels.
+- Filter incidents by title, service, status, and assignment.
+- Use the My incidents filter.
+- Release an assignment only when signed in as its owner.
+- Update incident statuses independently of report statuses.
+- Review timestamped activity history.
+
+Admin-role accounts can also access technician endpoints. Assignment release
+remains restricted to the assigned owner.
+
+### Grouping suggestions
+
+Technicians can request related-report suggestions and approve individual links.
+
+The current rules:
+
+- Service must match the incident.
+- Reports must be unlinked and not Resolved.
+- Submission time must be within two hours of a linked report.
+- If the incident has no linked reports, its creation time is used instead.
+- Matching a nearby linked report's location produces a Strong match.
+- Matching service and time without a location match produces a Possible match.
+- Location matching ignores capitalization and repeated whitespace.
+- Resolved incidents return no suggestions.
+
+The endpoint scores up to the 200 most recent candidate reports within the
+matching time range and returns up to 10 suggestions.
+
+Suggestions explain their reasons. They never link reports automatically.
+Approved links use the existing version checks and activity history.
+
+## Technology
+
+| Layer | Technology |
+| --- | --- |
+| Frontend | React, TypeScript, Vite, CSS |
+| API | ASP.NET Core 10 Minimal APIs |
+| Authentication | ASP.NET Core Identity bearer tokens |
+| Authorization | Reporter ownership filters and Technician/Admin roles |
+| Database | PostgreSQL |
+| Data access | Entity Framework Core and Npgsql |
+| Concurrency | Version tokens and HTTP 409 responses |
+| Testing | xUnit, WebApplicationFactory, Testcontainers |
+| Automation | GitHub Actions |
+
+## Requirements
+
+For local development on Windows:
+
+- Git
+- VS Code
+- Node.js 22.12+ in the 22.x line, or Node.js 24
+- .NET 10 SDK
+- Docker Desktop with Linux containers
+- EF Core CLI for database migrations
+
+The GitHub Actions frontend job uses Node.js 22.
+
+Verify your installation in PowerShell:
 
 ```powershell
 git --version
 node --version
-npm --version
+npm.cmd --version
 dotnet --version
+docker --version
 ```
 
-Extract this project, open its SignalDesk folder in VS Code, then open two terminals.
+If you do not already have the EF Core CLI:
 
-Terminal 1, from the project root:
+```powershell
+dotnet tool install --global dotnet-ef --version "10.*"
+```
+
+Verify it:
+
+```powershell
+dotnet ef --version
+```
+
+## Local setup
+
+Run commands from the repository root unless stated otherwise.
+
+### 1. Start PostgreSQL
+
+Open Docker Desktop and wait for its engine to start.
+
+```powershell
+docker compose up -d --wait
+```
+
+Use the database name, username, password, and published port configured
+in your local Compose setup.
+
+### 2. Configure the database connection
+
+Store the API connection string in .NET user secrets:
+
+```powershell
+dotnet user-secrets set "ConnectionStrings:SignalDesk" "Host=localhost;Port=<database-port>;Database=<database-name>;Username=<database-user>;Password=<database-password>" --project backend/SignalDesk.Api
+```
+
+Replace every placeholder with your local database settings.
+
+Do not commit real connection strings, passwords, access tokens, or
+authentication keys.
+
+### 3. Apply database migrations
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = "Development"
+dotnet ef database update --project backend/SignalDesk.Api
+```
+
+Migrations create and update the application's database schema.
+The API does not currently apply them automatically at startup.
+
+### 4. Install frontend dependencies
+
+```powershell
+npm.cmd --prefix frontend ci
+```
+
+Commit `frontend/package-lock.json` so clean installations use the
+recorded dependency versions.
+
+## Run locally
+
+Use two terminals and leave both running.
+
+### Terminal 1: API
+
+From the repository root:
 
 ```powershell
 $env:ASPNETCORE_ENVIRONMENT = "Development"
 dotnet run --project backend/SignalDesk.Api --urls http://localhost:5080
 ```
 
-Terminal 2, from the project root:
+### Terminal 2: frontend
 
 ```powershell
 cd frontend
-npm install
-npm run dev
+npm.cmd run dev -- --port 5173 --strictPort
 ```
 
-Open http://localhost:5173. The API health endpoint is http://localhost:5080/health.
-If PowerShell blocks npm.ps1, use `npm.cmd install` and `npm.cmd run dev`.
+Open:
 
-## First exercise
+- Frontend: http://localhost:5173
+- API health: http://localhost:5080/health
 
-1. Submit a fictional Wi-Fi report for STEM, floor 3.
-2. Submit another report for the same service and location.
-3. Change one status to Investigating, then Resolved.
-4. Refresh the browser: reports remain while the API is running.
-5. Restart the API: reports disappear. This demonstrates why lesson 2 needs a database.
-6. Open two browser tabs; refresh both so they have the same report version.
-   Change a status in tab A, then change it in stale tab B without refreshing.
-   Tab B should show a conflict, fetch fresh data, and let you retry intentionally.
+The health endpoint checks that the API is responding. It does not
+verify database connectivity.
 
-## Read the code in this order
+## Create a local account
 
-1. `backend/SignalDesk.Api/Program.cs`: records define the request/response shapes.
-   GET reads reports, POST validates and creates one, PATCH updates an existing report.
-   The lock makes version checking and updating one atomic operation in this process.
-2. `frontend/src/main.tsx`: the Report type describes API data; request sends HTTP calls;
-   useState stores UI state; submit and status invoke the API; JSX renders the screen.
-3. `frontend/src/style.css`: layout, controls, and responsive styles.
-4. `.github/workflows/ci.yml`: checks a clean build after a push or pull request.
+The current frontend provides sign-in. Account registration is available
+through the Identity API.
 
-Try adding a read-only count of unresolved reports. Explain where its value comes from
-before coding it. Then add a required Room field to both API validation and the form.
+With the API running, open a separate PowerShell terminal:
 
-## Build checks
+```powershell
+$email = Read-Host "Account email"
+$securePassword = Read-Host "Password: 12+ characters, uppercase, lowercase, number, symbol" -AsSecureString
+$password = [System.Net.NetworkCredential]::new("", $securePassword).Password
+$body = @{ email = $email; password = $password } | ConvertTo-Json
+
+try {
+    Invoke-RestMethod `
+        -Uri "http://localhost:5080/auth/register" `
+        -Method Post `
+        -ContentType "application/json" `
+        -Body $body
+}
+finally {
+    Remove-Variable password, securePassword, body -ErrorAction SilentlyContinue
+}
+```
+
+A successful registration normally returns no response body.
+Then sign in through the frontend.
+
+New accounts do not automatically receive Technician or Admin access.
+
+## Give a local account Technician access
+
+This bootstrap is available only in Development.
+
+1. Register the account first.
+2. Stop the API with Ctrl+C.
+3. Configure the registered account's email:
+
+```powershell
+dotnet user-secrets set "Development:TechnicianEmail" "your-registered-email@example.com" --project backend/SignalDesk.Api
+```
+
+4. Restart the API:
+
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = "Development"
+dotnet run --project backend/SignalDesk.Api --urls http://localhost:5080
+```
+
+5. Sign out and sign back in to obtain a token with the assigned role.
+6. Confirm that incident controls are available.
+7. Remove the temporary bootstrap setting:
+
+```powershell
+dotnet user-secrets remove "Development:TechnicianEmail" --project backend/SignalDesk.Api
+```
+
+The role remains stored in PostgreSQL.
+
+Restart the API after removing the setting so the next startup no longer
+uses the bootstrap configuration.
+
+## Demo workflow
+
+Use fictional reports and separate Reporter and Technician accounts.
+
+1. As Reporter, submit two Wi-Fi reports at `STEM 212`.
+2. Confirm the account cannot see another reporter's reports.
+3. Sign in as Technician.
+4. Create a Wi-Fi incident.
+5. Manually link the first report.
+6. Open Suggested reports.
+7. Review the second report's match reasons and approve its link.
+8. Assign the incident to yourself.
+9. Change the incident to Investigating.
+10. Review the activity history.
+11. Change the incident to Resolved.
+12. Sign in as Reporter and refresh the reports.
+13. Confirm the linked incident summary shows Resolved.
+
+Report status and incident status are separate. Resolving an incident
+does not automatically resolve its linked reports.
+
+## Build and test
+
+Stop the running API before building or testing on Windows.
+Otherwise, its executable may be locked.
+
+Keep Docker Desktop running.
+
+From the repository root:
 
 ```powershell
 dotnet build backend/SignalDesk.Api
-cd frontend
-npm run build
+npm.cmd --prefix frontend run build
+dotnet test backend/SignalDesk.Api.Tests/SignalDesk.Api.Tests.csproj --logger "console;verbosity=normal"
 ```
 
-CI compiles both projects. Integration and browser tests are a later milestone;
-a successful compile is not proof of correct behavior.
+### Integration-test coverage
 
-## Put it on GitHub
+The current suite contains 13 tests covering:
 
-Create an empty repository named `signaldesk` on GitHub (do not initialize a README).
-Run these from the extracted SignalDesk folder, replacing YOUR-USERNAME:
+- Authentication requirements.
+- Reporter ownership isolation.
+- Technician access to reports.
+- Rejection of unauthorized management requests.
+- Owner-only assignment release.
+- Stale-version conflicts.
+- Concurrent updates with one successful writer.
+- Activity history for successful changes.
+- Public incident summaries on reporter-owned reports.
+- Strong and Possible suggestion matches.
+- Exclusion of wrong-service, resolved, and linked reports.
+- Exclusion of reports outside the matching time window.
+- Suggestion endpoint authorization.
+- Approved links disappearing from suggestions.
+- Empty suggestions for resolved incidents.
+
+The tests create temporary PostgreSQL containers and use real
+registration and login.
+
+They do not require a manually running API or frontend and do not use
+the normal development database.
+
+The fixture creates its schema from the EF Core model. These tests do
+not validate the migration history or browser interface.
+
+Container shutdown and deletion messages at the end are normal cleanup.
+
+## GitHub Actions
+
+The workflow is in `.github/workflows/ci.yml`.
+
+It runs on:
+
+- Pushes.
+- Pull requests.
+- Manual workflow dispatch.
+
+Two jobs run independently:
+
+1. Backend restore, Release build, and integration tests.
+2. Frontend dependency installation, TypeScript checks, and production build.
+
+The tests create their own PostgreSQL containers. Database credentials
+from local user secrets are not needed in GitHub Actions.
+
+A green workflow confirms the configured build and test checks passed.
+It does not deploy the application.
+
+## Configuration
+
+### Frontend
+
+`frontend/src/AuthGate.tsx` reads `VITE_API_URL`.
+
+- Development defaults to `http://localhost:5080`.
+- Production builds default to same-origin API requests.
+- A separately hosted API requires its public HTTPS URL at build time.
+
+Example development setting:
+
+```dotenv
+VITE_API_URL=http://localhost:5080
+```
+
+Restart Vite after changing environment files.
+
+Frontend `VITE_` variables are public build configuration. Never put
+database passwords or private keys in them.
+
+### Backend
+
+| Configuration key | Environment-variable form | Purpose |
+| --- | --- | --- |
+| `ConnectionStrings:SignalDesk` | `ConnectionStrings__SignalDesk` | PostgreSQL connection |
+| `Cors:AllowedOrigins:0` | `Cors__AllowedOrigins__0` | Allowed frontend origin |
+| `DataProtection:KeysPath` | `DataProtection__KeysPath` | Persistent authentication-key directory |
+| `Development:TechnicianEmail` | `Development__TechnicianEmail` | Development-only role bootstrap |
+
+Development CORS defaults allow:
+
+- `http://localhost:5173`
+- `http://localhost:5174`
+
+Outside Development, cross-origin frontend access must be configured
+explicitly with HTTPS origins.
+
+Listening addresses come from `--urls` or hosting configuration.
+
+Outside Development, the API requires a Data Protection key directory.
+For deployment, that directory must be private and persistent.
+File persistence alone does not encrypt the key files.
+
+Changing the Data Protection application name or losing its keys can
+invalidate existing tokens.
+
+## Current limitations
+
+- No public deployment.
+- No organization or tenant isolation; technician access is application-wide.
+- No real-time updates; use Refresh to fetch changes.
+- Refreshing the browser requires signing in again.
+- No frontend registration or password-reset interface.
+- No automatic synchronization of report and incident statuses.
+- No saved suggestion dismissal or rejection workflow.
+- No report unlinking or incident deletion interface.
+- No pagination; current list filters operate on loaded records.
+- No email notifications, background jobs, or transactional outbox.
+- No browser end-to-end tests or automated migration tests.
+
+Grouping suggestions are deterministic rules, not an AI model.
+They identify possible relationships and require technician approval.
+
+## Troubleshooting
+
+### API executable is locked during a build
+
+Stop the API terminal with Ctrl+C.
+
+If the terminal cannot be found:
 
 ```powershell
-git init -b main
-git add .
-git commit -m "Start SignalDesk report submission and status workflow"
-git remote add origin https://github.com/YOUR-USERNAME/signaldesk.git
-git push -u origin main
+Get-Process -Name SignalDesk.Api -ErrorAction SilentlyContinue |
+    Stop-Process
 ```
 
-Commit the generated frontend/package-lock.json so dependency versions are reproducible.
-Authenticate through Git's browser prompt. Never put access tokens in source files.
+Then rebuild or rerun the tests.
 
-## Implementation roadmap
+### Frontend port 5173 is already in use
 
-Complete one milestone and its acceptance check before moving on.
+Check whether SignalDesk is already running at
+http://localhost:5173.
 
-| Milestone | Build | Done when |
-| --- | --- | --- |
-| 1: Local vertical slice | Report form, API, validation, status, version conflicts | Two tabs reproduce a stale-write conflict |
-| 2: Durable data | PostgreSQL, EF Core, migrations, database-enforced concurrency | Reports survive restart; concurrent writes cannot overwrite silently |
-| 3: Accounts and scope | ASP.NET Identity, organizations, Reporter/Technician/Admin roles | Automated tests reject another organization's IDs and unauthorized status changes |
-| 4: Incident workflow | Incidents, report linking, assignment, transition rules, timeline | Two reports link to one incident without deleting either report |
-| 5: Grouping suggestions | Same service + location + recent time window; human approval | Technician can approve or reject a suggestion with an audit trail |
-| 6: Live collaboration | SignalR, authenticated organization groups, reconnect/resync, presence | Two technicians see changes live; reconnect fetches missed state |
-| 7: Reliable background work | Transactional outbox, Hangfire, retry/backoff, delivery records | Simulated provider failure recovers without duplicate logical notifications |
-| 8: Analytics and release | Acknowledgment/resolution timestamps, charts, xUnit, Playwright, telemetry, deployment | Deployed demo passes end-to-end tests and documents measured benchmarks |
+To restart, stop the existing Vite terminal with Ctrl+C, then run
+the frontend command again.
 
-Add Tailwind and TanStack Query as the UI grows. Add Docker with PostgreSQL in milestone 2.
-Avoid introducing every library before there is a workflow that needs it.
+### Sign-in cannot reach the API
 
-## Database design to implement next
+- Confirm http://localhost:5080/health responds.
+- Check the browser Network tab.
+- Confirm requests target port 5080.
+- Check any `VITE_API_URL` override.
+- Restart Vite after changing environment files.
 
-- Organization: id, name.
-- ApplicationUser: Identity account plus organization membership.
-- Report: organizationId, reporterId, serviceId, location, description, createdAt,
-  optional incidentId, concurrency token.
-- Incident: organizationId, serviceId, title, severity, status, assignedTechnicianId,
-  createdAt, acknowledgedAt, resolvedAt, concurrency token.
-- IncidentUpdate: incidentId, authorId, message, visibility, createdAt.
-- OutboxMessage and NotificationDelivery: durable work and deduplication keys.
+### A request returns 403
 
-Reports are observations; incidents represent coordinated investigations.
-Many reports may belong to one incident. Linking reports preserves their provenance.
-Check organization membership on every query, command, and SignalR group join.
-Database transactions and conditional updates replace the single-process lock.
+The account is authenticated but lacks permission for that action.
 
-## Deployment plan
+Use a Technician account for incident management. After assigning a role,
+sign out and sign back in.
 
-GitHub stores the full source and runs CI. GitHub Pages hosts static frontend assets only;
-it cannot execute the ASP.NET API, host PostgreSQL, or run Hangfire.
+Only the assigned owner can release an incident assignment.
 
-After accounts and persistence are implemented, deploy the API to a .NET-compatible
-host such as Azure App Service and use managed PostgreSQL. Choose pricing at that time.
-Configure an HTTPS API URL for the frontend, exact allowed origins, secrets on the host,
-database migrations, and authenticated SignalR. Frontend environment variables are public.
-Keep backend workers running reliably; sleeping hosts can delay scheduled escalation.
+### A request returns 409
 
-For Pages, configure Vite's base as `/signaldesk/`, build with GitHub Actions, and publish
-the dist directory. Use hash routing if client-side routes are added. The current starter
-intentionally points to localhost and is not a public demo. A Pages-only demo would need
-an explicitly labeled browser-storage mode; it would not demonstrate shared coordination.
+The record changed after the frontend loaded it.
 
-## Learning rhythm
+Refresh and retry using the latest version. Do not bypass version checks.
 
-For each milestone: understand the data flow, implement one small change, run it,
-test its failure case, commit it, and explain the result in your own words.
-Document real measurements only. Do not claim concurrency or efficiency numbers until tested.
+### No suggestions appear
 
-Official references:
-- https://dotnet.microsoft.com/download/dotnet/10.0
-- https://vite.dev/guide/
-- https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages
-- https://learn.microsoft.com/aspnet/core/tutorials/min-web-api
-- https://learn.microsoft.com/ef/core/get-started/overview/first-app
-- https://learn.microsoft.com/aspnet/core/signalr/introduction
+Check that:
+
+- The incident is not Resolved.
+- Candidate reports are unlinked and not Resolved.
+- Services match.
+- Submission times fall within the two-hour window.
+
+Create fresh reports when demonstrating the feature.
+
+## Main source files
+
+| File | Responsibility |
+| --- | --- |
+| `backend/SignalDesk.Api/Program.cs` | Configuration, authentication, report endpoints |
+| `backend/SignalDesk.Api/SignalDeskDbContext.cs` | Database mappings and concurrency tokens |
+| `backend/SignalDesk.Api/IncidentEndpoints.cs` | Incident management and activity history |
+| `backend/SignalDesk.Api/IncidentSuggestionEndpoints.cs` | Suggestion selection and ranking |
+| `frontend/src/AuthGate.tsx` | Sign-in, in-memory token, authenticated requests |
+| `frontend/src/main.tsx` | Report UI, permissions, and navigation |
+| `frontend/src/IncidentPanel.tsx` | Incident UI, filters, and ownership |
+| `frontend/src/IncidentTimeline.tsx` | Activity timeline |
+| `frontend/src/IncidentSuggestions.tsx` | Suggestion review and approval |
+| `backend/SignalDesk.Api.Tests/` | API integration tests |
+| `.github/workflows/ci.yml` | Automated builds and tests |
+
+## Next milestones
+
+- Validate migrations against a fresh PostgreSQL database.
+- Add browser end-to-end tests.
+- Improve token-expiry handling.
+- Add pagination and server-side filtering.
+- Add organization boundaries if multi-organization use is required.
+- Add authenticated real-time updates.
+- Add reliable notifications and background processing.
+- Prepare production account provisioning, HTTPS, key protection, and backups.
+- Deploy a demo when a hosting provider is selected.
+
+GitHub Pages could host the static frontend, but the .NET API and
+PostgreSQL would still require separate hosting.
+
+## Development approach
+
+Implement one workflow at a time, test its failure cases, and commit a
+working milestone.
+
+Document measured results only. Passing tests demonstrate the covered
+scenarios; they are not performance benchmarks.
