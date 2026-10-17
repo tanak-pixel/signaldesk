@@ -200,9 +200,10 @@ public sealed class PermissionTests(ApiFixture fixture)
 
         var history = await GetHistory(owner, id);
 
-        Assert.Single(history.Where(entry =>
-            entry.GetProperty("action").GetString() ==
-            "AssignmentReleased"));
+        Assert.Single(
+            history,
+            entry => entry.GetProperty("action").GetString() ==
+                "AssignmentReleased");
     }
 
     [Fact]
@@ -288,18 +289,20 @@ public sealed class PermissionTests(ApiFixture fixture)
 
         try
         {
-            Assert.Single(responses.Where(
-                response => response.StatusCode == HttpStatusCode.OK));
+            Assert.Single(
+                responses,
+                response => response.StatusCode == HttpStatusCode.OK);
 
-            Assert.Single(responses.Where(
-                response =>
-                    response.StatusCode == HttpStatusCode.Conflict));
+            Assert.Single(
+                responses,
+                response => response.StatusCode == HttpStatusCode.Conflict);
 
             var history = await GetHistory(technician, id);
 
-            Assert.Single(history.Where(entry =>
-                entry.GetProperty("action").GetString() ==
-                "StatusChanged"));
+            Assert.Single(
+                history,
+                entry => entry.GetProperty("action").GetString() ==
+                    "StatusChanged");
 
             var details = await Get(
                 technician, $"/api/incidents/{id}");
@@ -360,14 +363,20 @@ public sealed class PermissionTests(ApiFixture fixture)
 
         var history = await GetHistory(technician, id);
 
-        Assert.Single(history.Where(entry =>
-            entry.GetProperty("action").GetString() == "Created"));
+        Assert.Single(
+            history,
+            entry => entry.GetProperty("action").GetString() ==
+                "Created");
 
-        Assert.Single(history.Where(entry =>
-            entry.GetProperty("action").GetString() == "ReportLinked"));
+        Assert.Single(
+            history,
+            entry => entry.GetProperty("action").GetString() ==
+                "ReportLinked");
 
-        Assert.Single(history.Where(entry =>
-            entry.GetProperty("action").GetString() == "StatusChanged"));
+        Assert.Single(
+            history,
+            entry => entry.GetProperty("action").GetString() ==
+                "StatusChanged");
 
         Assert.All(history, entry =>
         {

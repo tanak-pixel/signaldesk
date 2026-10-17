@@ -15,8 +15,7 @@ using Xunit;
 public sealed class ApiFixture : IAsyncLifetime
 {
     private readonly PostgreSqlContainer database =
-        new PostgreSqlBuilder()
-            .WithImage("postgres:17-alpine")
+        new PostgreSqlBuilder("postgres:17-alpine")
             .WithDatabase("signaldesk_tests")
             .WithUsername("signaldesk_test")
             .WithPassword("LocalTestDatabase!123")
@@ -31,16 +30,14 @@ public sealed class ApiFixture : IAsyncLifetime
         factory = new TestApiFactory(
             database.GetConnectionString());
 
-        // Start the test host, then prepare its isolated database.
         using var client = factory.CreateClient();
+
         await using var scope =
             factory.Services.CreateAsyncScope();
 
         var db = scope.ServiceProvider
             .GetRequiredService<SignalDeskDbContext>();
 
-        // These tests verify application behavior against the current model.
-        // They do not verify migration history.
         await db.Database.EnsureCreatedAsync();
 
         var roles = scope.ServiceProvider
@@ -86,8 +83,10 @@ public sealed class ApiFixture : IAsyncLifetime
             var account = await users.FindByEmailAsync(email);
 
             if (account is null)
+            {
                 throw new InvalidOperationException(
                     "Registered test account was not found.");
+            }
 
             var result = await users.AddToRoleAsync(
                 account, "Technician");
@@ -95,7 +94,6 @@ public sealed class ApiFixture : IAsyncLifetime
             EnsureIdentitySucceeded(result);
         }
 
-        // Login happens after role assignment so the token has the role.
         using var login = await client.PostAsJsonAsync(
             "/auth/login?useCookies=false",
             new { email, password });
@@ -111,6 +109,24 @@ public sealed class ApiFixture : IAsyncLifetime
                 body.GetProperty("accessToken").GetString());
 
         return client;
+    }
+
+    // Changes timestamps only in this fixture's temporary test database.
+    public async Task SetReportCreatedAtAsync(
+        Guid reportId,
+        DateTimeOffset createdAt)
+    {
+        await using var scope =
+            factory!.Services.CreateAsyncScope();
+
+        var db = scope.ServiceProvider
+            .GetRequiredService<SignalDeskDbContext>();
+
+        var report = await db.Reports.SingleAsync(
+            r => r.Id == reportId);
+
+        report.CreatedAt = createdAt;
+        await db.SaveChangesAsync();
     }
 
     public async Task DisposeAsync()
@@ -154,7 +170,6 @@ public sealed class ApiFixture : IAsyncLifetime
         protected override void ConfigureWebHost(
             IWebHostBuilder builder)
         {
-            // Program.cs currently permits Development only.
             builder.UseEnvironment("Development");
 
             builder.UseSetting(
@@ -178,10 +193,11 @@ public sealed class ApiFixture : IAsyncLifetime
 
             builder.ConfigureServices(services =>
             {
-                // Explicitly replace the application's database registration.
                 services.RemoveAll<SignalDeskDbContext>();
+
                 services.RemoveAll<
                     DbContextOptions<SignalDeskDbContext>>();
+
                 services.RemoveAll<
                     IDbContextOptionsConfiguration<SignalDeskDbContext>>();
 
